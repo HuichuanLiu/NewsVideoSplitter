@@ -11,7 +11,14 @@ class VideoSplitter(object):
             self.face_detector = dlib.get_frontal_face_detector()
             self.shape_predictor = dlib.shape_predictor('../models/shape_predictor_68_face_landmarks.dat')
             self.face_encoder = dlib.face_recognition_model_v1('../models/dlib_face_recognition_resnet_model_v1.dat')
+
+            # variable to record broadcasting room info
             self.hosts = []
+            self.left_face
+            self.right_face
+            self.mid_face_region
+            self.background
+
 
             # cv2 default parameters for video process control
             self.CV_CAP_PROP_POS_MSEC = 0
@@ -69,40 +76,27 @@ class VideoSplitter(object):
                 yield frame,time,position,ratio
 
     def check_host(self,frame):
-        width,height,channel = frame.size()
         faces = self.detector(frame,1)
 
         if len(faces)==0:
             return False
 
-        elif len(faces)==1:
-            face = faces[0]
-            x_mid = (face.left()+face.right())/2
-            if abs(x_mid-width/2)>width/10:   # the host's face is supposed to be in the horizontal x_mid of the scene
-                return False
-            else:
-                return True
-        elif len(faces)==2:
-            x_mids = []
-            for face in faces:
-                x_mid = (face.left()+face.right())/2
-                x_mids.append(x_mid)
-
-            if (x_mids[0]+x_mids[1])/2-width/2>width/10:
-                return False
-            else:
-                return True
-        else:
+        elif len(faces)>2:
             return False
+        else:
+            if self.check_face_position(faces):
+                return self.check_face_code(frame, faces)
+            else:
+                return False
 
     def check_bgd(self,frame):
-        '''
-        This function is to check if current scene is inside the broadcasting room
-        :param frame:
-        :return:
-        '''
+        b,g,r = cv2.split(frame)
+        disparity_b = np.linalg.norm(b-self.background['blue'])
+        disparity_g = np.linalg.norm(r-self.background['green'])
+        disparity_r = np.linalg.norm(r-self.background['red'])
+        disparity = np.average([disparity_b,disparity_g,disparity_r])
 
-        return False
+        return True if disparity<10 else False
 
     def split_video(self):
         frames = self.frame_capture(1)
@@ -129,7 +123,7 @@ class VideoSplitter(object):
     def get_face_code(self,frame,face):
         return np.array(self.face_encoder.compute_face_descriptor(frame,self.shape_predictor(frame,face)))
 
-    def compare_face(self,frame,face):
+    def check_face_code(self, frame, face):
         face_code = self.get_face_code(frame,face)
         disparity = min(self.hosts,lambda host:np.linalg.norm(face_code-host))
         return True if disparity<0.4 else False
@@ -138,9 +132,27 @@ class VideoSplitter(object):
         face_code = self.get_face_code(frame,face)
         self.hosts.append(face_code)
 
+    def check_face_position(self,faces):
+        sum_x = 0
+        for face in faces:
+            left = face.left()
+            right = face.right()
+            sum_x+=(left+right)//2
 
+        if len(faces)==1:
+            return True if sum_x<self.mid_face_region['left'] and sum_x>self.mid_face_region['right'] else False
 
+        elif len(faces)==2:
+            left_face = min(faces,lambda face:face.left())
+            right_face = max(faces,lambda face:face.left())
+            left_mid = (left_face.left()+left_face.right())//2
+            right_mid = (right_face.left()+right_face.right())//2
+            is_left_match = True if left_mid<self.left_face.right() and left_mid>self.left_face.left() else False
+            is_right_match = True if right_mid<self.right_face.right() and right_mid<self.right_face.left() else False
 
+            return is_left_match and is_right_match
 
+        else:
+            return False
 
 
